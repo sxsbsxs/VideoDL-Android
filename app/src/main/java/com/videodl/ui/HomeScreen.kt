@@ -50,7 +50,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import coil.compose.SubcomposeAsyncImage
+import coil.request.ImageRequest
+import okhttp3.Headers
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
 import com.videodl.model.VideoFormat
 import com.videodl.model.VideoInfo
 
@@ -449,6 +453,21 @@ private fun ErrorPanel(message: String) {
 
 @Composable
 private fun VideoResultCard(videoInfo: VideoInfo, onDownload: (VideoFormat) -> Unit) {
+    val context = LocalContext.current
+    val coverRequest = remember(videoInfo.thumbnail, videoInfo.webpageUrl) {
+        val referer = videoInfo.webpageUrl.ifBlank { "https://www.google.com/" }
+        ImageRequest.Builder(context)
+            .data(videoInfo.thumbnail)
+            .headers(
+                Headers.Builder()
+                    .add("Referer", referer)
+                    .add("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36")
+                    .build()
+            )
+            .crossfade(true)
+            .build()
+    }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -475,46 +494,58 @@ private fun VideoResultCard(videoInfo: VideoInfo, onDownload: (VideoFormat) -> U
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(13.dp), verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(190.dp)
+                    .clip(RoundedCornerShape(17.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant)
+            ) {
                 if (videoInfo.thumbnail.isNotBlank()) {
-                    AsyncImage(
-                        model = videoInfo.thumbnail,
+                    SubcomposeAsyncImage(
+                        model = coverRequest,
                         contentDescription = "视频封面",
-                        modifier = Modifier
-                            .size(width = 112.dp, height = 76.dp)
-                            .clip(RoundedCornerShape(14.dp)),
-                        contentScale = ContentScale.Crop
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                        loading = { CoverPlaceholder("正在加载封面") },
+                        error = { CoverPlaceholder("封面暂不可用") }
                     )
                 } else {
-                    Surface(
-                        modifier = Modifier.size(width = 112.dp, height = 76.dp),
-                        shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(Icons.Outlined.VideoFile, contentDescription = null, modifier = Modifier.size(28.dp))
-                        }
-                    }
+                    CoverPlaceholder("网站没有提供封面")
                 }
 
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(5.dp)
-                ) {
-                    Text(
-                        videoInfo.title,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 14.sp,
-                        lineHeight = 19.sp,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        durationText(videoInfo.durationSeconds),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        fontSize = 11.sp
-                    )
+                val duration = durationText(videoInfo.durationSeconds)
+                if (duration != "时长未知") {
+                    Surface(
+                        modifier = Modifier.align(Alignment.BottomEnd).padding(9.dp),
+                        shape = RoundedCornerShape(7.dp),
+                        color = Color.Black.copy(alpha = 0.78f)
+                    ) {
+                        Text(
+                            duration,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            color = Color.White,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
                 }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    videoInfo.title,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "来源：${videoInfo.extractor}  ·  ${durationText(videoInfo.durationSeconds)}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp
+                )
             }
 
             Box(
@@ -550,6 +581,33 @@ private fun VideoResultCard(videoInfo: VideoInfo, onDownload: (VideoFormat) -> U
                     )
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CoverPlaceholder(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceVariant),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(7.dp)
+        ) {
+            Icon(
+                Icons.Outlined.VideoFile,
+                contentDescription = null,
+                modifier = Modifier.size(32.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                message,
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

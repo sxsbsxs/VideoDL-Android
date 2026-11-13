@@ -29,3 +29,13 @@ data class VideoFormat(
             }
         }
 }
+
+
+data class DownloadedMedia(
+    val uri: android.net.Uri,
+    val displayName: String,
+    val mimeType: String,
+    val sizeBytes: Long,
+    val modifiedAtMillis: Long,
+    val localFile: java.io.File?
+)

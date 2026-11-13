@@ -8,11 +8,15 @@
 - **C++ + Android NDK:** native bridge prepared for FFmpeg integration.
 - **No self-hosted backend:** extraction runs on the Android device and connects directly to the target website.
 
-## Current milestone: 0.3.0
+## Current milestone: 0.4.0
 
 - Refined monochrome UI with an Apple-inspired visual language and IDM-style workflow.
 - Paste video links from the clipboard and parse them locally with yt-dlp.
-- Show title, thumbnail, duration and available progressive formats.
+- Show title, a larger landscape cover, duration and available progressive formats.
+- Show visible cover-loading and cover-error placeholders when a site blocks or omits its thumbnail.
+- Browse completed downloads in the app, including locally generated video thumbnails, file sizes and save dates.
+- Open or delete saved files from the Downloads and Files tabs.
+- Automatically refresh the Downloads tab while it is visible.
 - Offer formats which contain both audio and video in one stream.
 - Start a download in an Android foreground service.
 - Show download percentage, transfer speed and estimated remaining time in the Android foreground notification.
@@ -27,7 +31,8 @@
 
 - The current APK does **not** bundle FFmpeg shared libraries. The C++ JNI module checks whether libavformat.so is present, but a clean build will report it as unavailable.
 - To avoid silently creating video-only files, the current version only lists formats which already contain audio and video together. Separate high-resolution video/audio streams cannot yet be merged in this build.
-- Pause/resume controls, a persistent multi-task queue, in-app task history, secure cookie import, and in-app file browsing are follow-up work.
+- Pause/resume controls, a persistent multi-task queue, in-app progress history, secure cookie import, and merging separate high-resolution video/audio streams remain follow-up work.
+- On Android 7–9, downloaded files live in the app-specific Download/VideoDL folder; on Android 10 and newer, completed files are published to Download/VideoDL.
 - DRM-protected streams and content which requires bypassing access controls are not supported.
 - Some sites may require an authorized login or cookies, and some websites may temporarily block automated requests.
 

@@ -17,6 +17,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -28,10 +29,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.videodl.data.PythonBridge
+import com.videodl.data.LocalMediaRepository
 import com.videodl.engine.NativeBridge
 import com.videodl.model.VideoInfo
+import com.videodl.model.DownloadedMedia
 import com.videodl.service.DownloadForegroundService
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class AppPage(val label: String, val icon: ImageVector) {
     HOME("首页", Icons.Outlined.Home),
@@ -50,6 +56,49 @@ fun VideoDLApp() {
     var videoInfo by remember { mutableStateOf<VideoInfo?>(null) }
     var parsing by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var localFiles by remember { mutableStateOf<List<DownloadedMedia>>(emptyList()) }
+    var loadingFiles by remember { mutableStateOf(false) }
+    var refreshFilesKey by remember { mutableStateOf(0) }
+
+    LaunchedEffect(page, refreshFilesKey) {
+        if (page == AppPage.DOWNLOADS.name || page == AppPage.FILES.name) {
+            do {
+                loadingFiles = true
+                try {
+                    localFiles = withContext(Dispatchers.IO) {
+                        LocalMediaRepository.list(context)
+                    }
+                } catch (_: Exception) {
+                    localFiles = emptyList()
+                } finally {
+                    loadingFiles = false
+                }
+                if (page == AppPage.DOWNLOADS.name) delay(2500L)
+            } while (page == AppPage.DOWNLOADS.name)
+        }
+    }
+
+    fun openDownloadedFile(file: DownloadedMedia) {
+        runCatching {
+            LocalMediaRepository.open(context, file)
+        }.onFailure {
+            Toast.makeText(context, it.message ?: "无法打开文件", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    fun deleteDownloadedFile(file: DownloadedMedia) {
+        scope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                LocalMediaRepository.delete(context, file)
+            }
+            if (deleted) {
+                localFiles = localFiles.filterNot { it.uri == file.uri }
+                Toast.makeText(context, "文件已删除", Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, "删除失败，请检查文件状态", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     val ffmpegAvailable = remember {
         runCatching { NativeBridge().ffmpegAvailable() }.getOrDefault(false)
@@ -155,8 +204,22 @@ fun VideoDLApp() {
                 contentPadding = contentPadding
             )
 
-            AppPage.DOWNLOADS -> DownloadsScreen(contentPadding)
-            AppPage.FILES -> FilesScreen(contentPadding)
+            AppPage.DOWNLOADS -> DownloadsScreen(
+                contentPadding = contentPadding,
+                files = localFiles,
+                loading = loadingFiles,
+                onRefresh = { refreshFilesKey++ },
+                onOpen = ::openDownloadedFile,
+                onDelete = ::deleteDownloadedFile
+            )
+            AppPage.FILES -> FilesScreen(
+                contentPadding = contentPadding,
+                files = localFiles,
+                loading = loadingFiles,
+                onRefresh = { refreshFilesKey++ },
+                onOpen = ::openDownloadedFile,
+                onDelete = ::deleteDownloadedFile
+            )
             AppPage.SETTINGS -> SettingsScreen(contentPadding, ffmpegAvailable)
         }
     }

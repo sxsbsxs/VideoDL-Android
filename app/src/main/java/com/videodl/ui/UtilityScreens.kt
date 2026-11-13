@@ -1,5 +1,7 @@
 package com.videodl.ui
 
+import android.graphics.Bitmap
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -13,41 +15,73 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Lock
+import androidx.compose.material.icons.outlined.OpenInNew
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.videodl.data.LocalMediaRepository
+import com.videodl.model.DownloadedMedia
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.text.DateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
-fun DownloadsScreen(contentPadding: PaddingValues) {
+fun DownloadsScreen(
+    contentPadding: PaddingValues,
+    files: List<DownloadedMedia>,
+    loading: Boolean,
+    onRefresh: () -> Unit,
+    onOpen: (DownloadedMedia) -> Unit,
+    onDelete: (DownloadedMedia) -> Unit
+) {
     PageFrame(contentPadding) {
         PageHeader(
             eyebrow = "YOUR DOWNLOADS",
             title = "下载任务",
-            subtitle = "后台下载时，系统通知显示实时进度与速度。"
+            subtitle = "这里显示已完成并保存到本机的文件。"
         )
-        EmptyState(
-            icon = Icons.Outlined.Download,
-            title = "下载记录还在路上",
-            description = "当前版本通过 Android 前台服务下载，系统通知栏会显示实时百分比、下载速度与预计剩余时间。持久化任务队列、应用内历史与暂停/继续仍在完善。"
+        MediaListSection(
+            title = "最近下载",
+            files = files,
+            loading = loading,
+            emptyTitle = "还没有已完成的下载",
+            emptyDescription = "开始下载后，任务进度会显示在系统通知栏；完成后文件会自动出现在这里。",
+            onRefresh = onRefresh,
+            onOpen = onOpen,
+            onDelete = onDelete
         )
         InfoStrip(
             icon = Icons.Outlined.Info,
@@ -58,24 +92,189 @@ fun DownloadsScreen(contentPadding: PaddingValues) {
 }
 
 @Composable
-fun FilesScreen(contentPadding: PaddingValues) {
+fun FilesScreen(
+    contentPadding: PaddingValues,
+    files: List<DownloadedMedia>,
+    loading: Boolean,
+    onRefresh: () -> Unit,
+    onOpen: (DownloadedMedia) -> Unit,
+    onDelete: (DownloadedMedia) -> Unit
+) {
     PageFrame(contentPadding) {
         PageHeader(
             eyebrow = "LOCAL LIBRARY",
             title = "本地文件",
-            subtitle = "你保存到设备的视频与音频。"
+            subtitle = "查看、打开或删除 VideoDL 保存的文件。"
         )
-        EmptyState(
-            icon = Icons.Outlined.FolderOpen,
-            title = "暂时还没有文件列表",
-            description = "下载完成的文件会保存到 Download/VideoDL。应用内文件索引、封面网格和文件操作将在下一阶段接入。"
+        MediaListSection(
+            title = "文件库",
+            files = files,
+            loading = loading,
+            emptyTitle = "文件夹目前是空的",
+            emptyDescription = "下载完成的视频或音频会自动整理到 Download/VideoDL。",
+            onRefresh = onRefresh,
+            onOpen = onOpen,
+            onDelete = onDelete
         )
         InfoStrip(
-            icon = Icons.Outlined.VideoFile,
-            title = "默认目录",
-            description = "Download/VideoDL"
+            icon = Icons.Outlined.FolderOpen,
+            title = "扫描范围",
+            description = "仅显示 VideoDL 自己保存的文件，不扫描你的整个手机。"
         )
     }
+}
+
+@Composable
+private fun MediaListSection(
+    title: String,
+    files: List<DownloadedMedia>,
+    loading: Boolean,
+    emptyTitle: String,
+    emptyDescription: String,
+    onRefresh: () -> Unit,
+    onOpen: (DownloadedMedia) -> Unit,
+    onDelete: (DownloadedMedia) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(11.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Spacer(Modifier.weight(1f))
+            Text(
+                "${files.size} 项",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp
+            )
+            IconButton(onClick = onRefresh, modifier = Modifier.size(38.dp)) {
+                Icon(Icons.Outlined.Refresh, contentDescription = "刷新文件列表")
+            }
+        }
+
+        if (loading && files.isEmpty()) {
+            Box(Modifier.fillMaxWidth().padding(vertical = 30.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator()
+            }
+        } else if (files.isEmpty()) {
+            EmptyState(
+                icon = Icons.Outlined.FolderOpen,
+                title = emptyTitle,
+                description = emptyDescription
+            )
+        } else {
+            files.take(60).forEach { file ->
+                MediaFileCard(file = file, onOpen = { onOpen(file) }, onDelete = { onDelete(file) })
+            }
+        }
+    }
+}
+
+@Composable
+private fun MediaFileCard(
+    file: DownloadedMedia,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    val thumbnail by produceState<Bitmap?>(initialValue = null, key1 = file.uri) {
+        value = withContext(Dispatchers.IO) {
+            LocalMediaRepository.loadThumbnail(context, file)
+        }
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(19.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+    ) {
+        Row(
+            modifier = Modifier.padding(11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(11.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 108.dp, height = 76.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                if (thumbnail != null) {
+                    Image(
+                        bitmap = thumbnail!!.asImageBitmap(),
+                        contentDescription = "视频缩略图",
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop
+                    )
+                } else {
+                    Icon(
+                        Icons.Outlined.VideoFile,
+                        contentDescription = null,
+                        modifier = Modifier.size(28.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Text(
+                    file.displayName,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    "${formatFileSize(file.sizeBytes)} · ${formatDate(file.modifiedAtMillis)}",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 9.sp,
+                    lineHeight = 13.sp,
+                    maxLines = 2
+                )
+                Text(
+                    file.mimeType.substringBefore('/').uppercase(Locale.ROOT),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                IconButton(onClick = onOpen, modifier = Modifier.size(36.dp)) {
+                    Icon(Icons.Outlined.OpenInNew, contentDescription = "打开文件")
+                }
+                IconButton(onClick = onDelete, modifier = Modifier.size(36.dp)) {
+                    Icon(
+                        Icons.Outlined.DeleteOutline,
+                        contentDescription = "删除文件",
+                        tint = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    if (bytes <= 0L) return "大小未知"
+    val mb = bytes / (1024.0 * 1024.0)
+    return if (mb >= 1024.0) {
+        String.format(Locale.getDefault(), "%.2f GB", mb / 1024.0)
+    } else {
+        String.format(Locale.getDefault(), "%.1f MB", mb)
+    }
+}
+
+private fun formatDate(timestamp: Long): String {
+    if (timestamp <= 0L) return "日期未知"
+    return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, Locale.getDefault())
+        .format(Date(timestamp))
 }
 
 @Composable
@@ -126,7 +325,7 @@ fun SettingsScreen(contentPadding: PaddingValues, ffmpegAvailable: Boolean) {
         }
         InfoStrip(
             icon = Icons.Outlined.Info,
-            title = "VideoDL Android 0.3.0",
+            title = "VideoDL Android 0.4.0",
             description = "仅下载你拥有或获准保存的内容。DRM 与访问控制不会被绕过。"
         )
     }
@@ -137,6 +336,7 @@ private fun PageFrame(contentPadding: PaddingValues, content: @Composable () -> 
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(
                 start = 20.dp,
                 top = contentPadding.calculateTopPadding() + 19.dp,
@@ -227,9 +427,7 @@ private fun SettingRow(
     trailing: String?
 ) {
     Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(

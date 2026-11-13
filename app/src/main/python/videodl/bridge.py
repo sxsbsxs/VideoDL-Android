@@ -238,7 +238,10 @@ def parse_video(url):
         "webpage_url": info.get("webpage_url") or value,
         "title": info.get("title") or "未知视频",
         "extractor": info.get("extractor_key") or info.get("extractor") or "unknown",
-        "thumbnail": info.get("thumbnail") or "",
+        "thumbnail": info.get("thumbnail") or next(
+            (item.get("url") for item in reversed(info.get("thumbnails") or []) if item.get("url")),
+            ""
+        ),
         "duration": info.get("duration"),
         "formats": cleaned_formats,
     }
