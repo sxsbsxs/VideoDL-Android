@@ -12,13 +12,94 @@ def _validate_url(url):
     return value
 
 
+def _install_bilibili_412_fallback(yt_dlp):
+    """Retry Bilibili playurl metadata once with its non-WBI endpoint after HTTP 412.
+
+    This is a best-effort compatibility fallback based on reports in the yt-dlp
+    issue tracker. It does not bypass login, DRM, or any access restriction.
+    """
+    try:
+        from yt_dlp.extractor.bilibili import BilibiliBaseIE
+        from yt_dlp.utils import ExtractorError, join_nonempty, traverse_obj
+    except Exception:
+        return
+
+    if getattr(BilibiliBaseIE, "_videodl_412_fallback_installed", False):
+        return
+
+    original = BilibiliBaseIE._download_playinfo
+
+    def download_playinfo_with_fallback(self, bvid, cid, headers=None, query=None, fatal=True):
+        try:
+            return original(self, bvid, cid, headers=headers, query=query, fatal=fatal)
+        except Exception as first_error:
+            if not re.search(
+                r"HTTP Error 412|HTTP 412|412: Precondition Failed|412 Precondition Failed",
+                str(first_error),
+                re.I,
+            ):
+                raise
+
+        params = {
+            "bvid": bvid,
+            "cid": cid,
+            "fnval": 4048,
+            **self._dm_params,
+            **(query or {}),
+        }
+        if self.is_logged_in:
+            params.pop("try_look", None)
+
+        quality = params.get("qn")
+        note = (
+            f"Retrying Bilibili video format {quality} for cid {cid}"
+            if quality else f"Retrying Bilibili video formats for cid {cid}"
+        )
+
+        try:
+            response = self._download_json(
+                "https://api.bilibili.com/x/player/playurl",
+                bvid,
+                query=self._sign_wbi(params, bvid),
+                headers=headers,
+                note=note,
+            )
+        except Exception as fallback_error:
+            raise RuntimeError(
+                "Bilibili 标准 playurl 接口返回 HTTP 412，备用接口也未能获取视频信息："
+                + str(fallback_error)
+            ) from fallback_error
+
+        code = traverse_obj(response, ("code", {lambda value: value * -1}))
+        if code == 0:
+            self.report_warning("Bilibili 标准接口返回 412；备用 playurl 接口已成功响应。")
+            return response["data"]
+
+        message = join_nonempty(
+            "备用 playurl 接口无法获取视频信息",
+            code,
+            traverse_obj(response, ("message", {str})),
+            delim=": ",
+        )
+        expected = code in (401, 352)
+        if expected:
+            message += "，请稍后重试或检查账号访问权限"
+        if fatal:
+            raise ExtractorError(message, expected=expected)
+        self.report_warning(message)
+        return None
+
+    BilibiliBaseIE._download_playinfo = download_playinfo_with_fallback
+    BilibiliBaseIE._videodl_412_fallback_installed = True
+
+
 def _friendly_site_error(error):
     message = str(error)
     if re.search(r"HTTP Error 412|HTTP 412|412: Precondition Failed|412 Precondition Failed", message, re.I):
         raise RuntimeError(
             "目标网站返回 HTTP 412（Precondition Failed），拒绝了这次解析或取流请求。"
-            "这通常是网站的请求校验、登录状态或临时访问限制导致的，不是 VideoDL 构建失败。"
-            "请先确认该视频能在网站官方页面正常播放；若网站要求登录，需使用你有权访问的账号。"
+            "如果是 Bilibili，VideoDL 已尝试备用 playurl 接口；仍失败时，可能是网站的请求校验、"
+            "登录状态、地区策略或临时访问限制导致。请先确认视频能在官方页面正常播放。"
             "当前版本尚未提供 Cookie 导入。VideoDL 不会绕过 DRM 或网站访问控制。"
         ) from error
 
@@ -35,6 +116,7 @@ def _extractor():
         import yt_dlp
     except Exception as error:
         raise RuntimeError("yt-dlp 引擎加载失败：" + str(error))
+    _install_bilibili_412_fallback(yt_dlp)
     return yt_dlp
 
 

@@ -2,30 +2,37 @@
 
 **VideoDL** is an open-source Android video downloader built with Kotlin, Java, Python and C++.
 
-- **Kotlin + Jetpack Compose:** application UI and app state.
+- **Kotlin + Jetpack Compose:** native app UI, navigation and app state.
 - **Java:** Android foreground download service and MediaStore publishing.
 - **Python + yt-dlp:** on-device site extraction, metadata and downloading.
 - **C++ + Android NDK:** native bridge prepared for FFmpeg integration.
 - **No self-hosted backend:** extraction runs on the Android device and connects directly to the target website.
 
-> This is the first implementation milestone (0.1.0), not a claim that every downloader feature is complete. Website support depends on yt-dlp extractors and each website's current access rules.
+## Current milestone: 0.2.0
 
-## Features in this milestone
-
-- Paste an HTTP/HTTPS video URL and run a real yt-dlp extraction.
+- Refined monochrome UI with an Apple-inspired visual language and IDM-style workflow.
+- Paste video links from the clipboard and parse them locally with yt-dlp.
 - Show title, thumbnail, duration and available progressive formats.
 - Offer formats which contain both audio and video in one stream.
 - Start a download in an Android foreground service.
 - Publish completed downloads to Download/VideoDL on Android 10 and newer.
+- Display a clearer explanation when a site responds with HTTP 412 or HTTP 429.
+- For Bilibili only, retry the playurl metadata request once with the alternate endpoint if the standard WBI endpoint returns HTTP 412. This is a best-effort fallback based on community reports; it is not guaranteed for every video or account.
 - Build a debug APK with GitHub Actions.
+
+> Website support depends on yt-dlp extractors and each website's current access rules. A successful APK build does not guarantee that every website will accept an extraction request.
 
 ## Important current limitations
 
 - The current APK does **not** bundle FFmpeg shared libraries. The C++ JNI module checks whether libavformat.so is present, but a clean build will report it as unavailable.
-- To avoid silently creating video-only files, the first version only lists formats which already contain audio and video together. Separate high-resolution video/audio streams cannot yet be merged in this build.
-- Pause/resume controls, a persistent multi-task queue, live speed/progress UI, cookie import, and in-app file browsing are planned follow-up work.
+- To avoid silently creating video-only files, the current version only lists formats which already contain audio and video together. Separate high-resolution video/audio streams cannot yet be merged in this build.
+- Pause/resume controls, a persistent multi-task queue, live speed/progress UI, secure cookie import, and in-app file browsing are follow-up work.
 - DRM-protected streams and content which requires bypassing access controls are not supported.
-- Some sites may require an authorized login or cookies, and some websites may not be supported by yt-dlp.
+- Some sites may require an authorized login or cookies, and some websites may temporarily block automated requests.
+
+## HTTP 412 troubleshooting
+
+HTTP 412 is returned by the **target website**, not by the Android build system. Bilibili has had yt-dlp extractor reports where the webpage loads but its playurl metadata endpoint returns 412. VideoDL now tries one alternate playurl endpoint in that specific case. If both endpoints fail, check that the video opens normally on the official site and that your account/network is allowed to access it. The app does not bypass DRM or access controls.
 
 ## Build
 
@@ -70,7 +77,7 @@ VideoDL/
 │   ├── service/     # Java foreground download service
 │   └── ui/          # Jetpack Compose screens and theme
 ├── app/src/main/python/videodl/
-│   └── bridge.py    # yt-dlp extraction and download entry points
+│   └── bridge.py    # yt-dlp extraction, download and Bilibili fallback
 ├── app/src/main/cpp/
 │   ├── CMakeLists.txt
 │   └── ffmpeg_bridge.cpp
