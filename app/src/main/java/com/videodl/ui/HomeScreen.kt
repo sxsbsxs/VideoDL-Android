@@ -199,8 +199,7 @@ private fun HeroCard() {
                 )
             }
             Text(
-                "把喜欢的视频，
-保存到自己的设备。",
+                "把喜欢的视频，\n保存到自己的设备。",
                 color = Color.White,
                 fontSize = 25.sp,
                 lineHeight = 33.sp,
