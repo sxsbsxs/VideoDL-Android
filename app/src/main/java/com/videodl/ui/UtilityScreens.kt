@@ -42,12 +42,12 @@ fun DownloadsScreen(contentPadding: PaddingValues) {
         PageHeader(
             eyebrow = "YOUR DOWNLOADS",
             title = "下载任务",
-            subtitle = "查看正在进行的下载与任务状态。"
+            subtitle = "后台下载时，系统通知显示实时进度与速度。"
         )
         EmptyState(
             icon = Icons.Outlined.Download,
             title = "下载记录还在路上",
-            description = "当前版本会通过 Android 前台服务执行下载，并在系统通知栏显示状态。持久化任务队列与应用内实时进度正在完善。"
+            description = "当前版本通过 Android 前台服务下载，系统通知栏会显示实时百分比、下载速度与预计剩余时间。持久化任务队列、应用内历史与暂停/继续仍在完善。"
         )
         InfoStrip(
             icon = Icons.Outlined.Info,
@@ -126,7 +126,7 @@ fun SettingsScreen(contentPadding: PaddingValues, ffmpegAvailable: Boolean) {
         }
         InfoStrip(
             icon = Icons.Outlined.Info,
-            title = "VideoDL Android 0.1.0",
+            title = "VideoDL Android 0.3.0",
             description = "仅下载你拥有或获准保存的内容。DRM 与访问控制不会被绕过。"
         )
     }

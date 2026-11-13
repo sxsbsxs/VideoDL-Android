@@ -8,13 +8,14 @@
 - **C++ + Android NDK:** native bridge prepared for FFmpeg integration.
 - **No self-hosted backend:** extraction runs on the Android device and connects directly to the target website.
 
-## Current milestone: 0.2.0
+## Current milestone: 0.3.0
 
 - Refined monochrome UI with an Apple-inspired visual language and IDM-style workflow.
 - Paste video links from the clipboard and parse them locally with yt-dlp.
 - Show title, thumbnail, duration and available progressive formats.
 - Offer formats which contain both audio and video in one stream.
 - Start a download in an Android foreground service.
+- Show download percentage, transfer speed and estimated remaining time in the Android foreground notification.
 - Publish completed downloads to Download/VideoDL on Android 10 and newer.
 - Display a clearer explanation when a site responds with HTTP 412 or HTTP 429.
 - For Bilibili only, retry the playurl metadata request once with the alternate endpoint if the standard WBI endpoint returns HTTP 412. This is a best-effort fallback based on community reports; it is not guaranteed for every video or account.
@@ -26,7 +27,7 @@
 
 - The current APK does **not** bundle FFmpeg shared libraries. The C++ JNI module checks whether libavformat.so is present, but a clean build will report it as unavailable.
 - To avoid silently creating video-only files, the current version only lists formats which already contain audio and video together. Separate high-resolution video/audio streams cannot yet be merged in this build.
-- Pause/resume controls, a persistent multi-task queue, live speed/progress UI, secure cookie import, and in-app file browsing are follow-up work.
+- Pause/resume controls, a persistent multi-task queue, in-app task history, secure cookie import, and in-app file browsing are follow-up work.
 - DRM-protected streams and content which requires bypassing access controls are not supported.
 - Some sites may require an authorized login or cookies, and some websites may temporarily block automated requests.
 

@@ -12,12 +12,18 @@ def _validate_url(url):
     return value
 
 
-def _install_bilibili_412_fallback(yt_dlp):
-    """Retry Bilibili playurl metadata once with its non-WBI endpoint after HTTP 412.
+def _bilibili_url_without_trailing_slash(url):
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    is_bilibili = host == "bilibili.com" or host.endswith(".bilibili.com")
+    path = parsed.path.rstrip("/")
+    if is_bilibili and path and path != parsed.path:
+        return parsed._replace(path=path).geturl()
+    return None
 
-    This is a best-effort compatibility fallback based on reports in the yt-dlp
-    issue tracker. It does not bypass login, DRM, or any access restriction.
-    """
+
+def _install_bilibili_412_fallback(yt_dlp):
+    """Retry Bilibili playurl metadata once with its non-WBI endpoint after HTTP 412."""
     try:
         from yt_dlp.extractor.bilibili import BilibiliBaseIE
         from yt_dlp.utils import ExtractorError, join_nonempty, traverse_obj
@@ -98,8 +104,8 @@ def _friendly_site_error(error):
     if re.search(r"HTTP Error 412|HTTP 412|412: Precondition Failed|412 Precondition Failed", message, re.I):
         raise RuntimeError(
             "目标网站返回 HTTP 412（Precondition Failed），拒绝了这次解析或取流请求。"
-            "如果是 Bilibili，VideoDL 已尝试备用 playurl 接口；仍失败时，可能是网站的请求校验、"
-            "登录状态、地区策略或临时访问限制导致。请先确认视频能在官方页面正常播放。"
+            "Bilibili 的播放信息阶段会尝试备用 playurl 接口，但网站仍可能因请求校验、"
+            "登录状态、地区策略或临时访问限制而拒绝请求。请先确认视频能在官方页面正常播放。"
             "当前版本尚未提供 Cookie 导入。VideoDL 不会绕过 DRM 或网站访问控制。"
         ) from error
 
@@ -120,6 +126,37 @@ def _extractor():
     return yt_dlp
 
 
+def _make_progress_hook(progress_file):
+    if not progress_file:
+        return None
+
+    progress_file = os.path.abspath(progress_file)
+    os.makedirs(os.path.dirname(progress_file), exist_ok=True)
+
+    def write_progress(data):
+        payload = {
+            "status": data.get("status") or "unknown",
+            "downloaded_bytes": data.get("downloaded_bytes") or 0,
+            "total_bytes": data.get("total_bytes"),
+            "total_bytes_estimate": data.get("total_bytes_estimate"),
+            "speed": data.get("speed"),
+            "eta": data.get("eta"),
+        }
+        temp_path = progress_file + ".tmp"
+        try:
+            with open(temp_path, "w", encoding="utf-8") as stream:
+                json.dump(payload, stream, ensure_ascii=False)
+            os.replace(temp_path, progress_file)
+        except OSError:
+            try:
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except OSError:
+                pass
+
+    return write_progress
+
+
 def parse_video(url):
     value = _validate_url(url)
     yt_dlp = _extractor()
@@ -135,11 +172,23 @@ def parse_video(url):
         "extractor_retries": 2,
     }
 
-    try:
-        with yt_dlp.YoutubeDL(options) as ydl:
+    with yt_dlp.YoutubeDL(options) as ydl:
+        try:
             info = ydl.extract_info(value, download=False)
-    except Exception as error:
-        _friendly_site_error(error)
+        except Exception as first_error:
+            retry_url = _bilibili_url_without_trailing_slash(value)
+            if not retry_url or not re.search(
+                r"HTTP Error 412|HTTP 412|412: Precondition Failed|412 Precondition Failed",
+                str(first_error),
+                re.I,
+            ):
+                _friendly_site_error(first_error)
+            try:
+                ydl.report_warning("Bilibili 返回 HTTP 412；正在使用不带末尾斜杠的网址重试一次。")
+                info = ydl.extract_info(retry_url, download=False)
+                value = retry_url
+            except Exception as retry_error:
+                _friendly_site_error(retry_error)
 
     if not info:
         raise RuntimeError("网站没有返回可用的视频信息。")
@@ -196,7 +245,7 @@ def parse_video(url):
     return json.dumps(result, ensure_ascii=False)
 
 
-def download_video(url, format_id, output_dir):
+def download_video(url, format_id, output_dir, progress_file=None):
     value = _validate_url(url)
     yt_dlp = _extractor()
 
@@ -222,17 +271,28 @@ def download_video(url, format_id, output_dir):
         "windowsfilenames": False,
     }
 
+    progress_hook = _make_progress_hook(progress_file)
+    if progress_hook:
+        options["progress_hooks"] = [progress_hook]
+
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([value])
     except Exception as error:
         _friendly_site_error(error)
 
+    excluded_progress_files = set()
+    if progress_file:
+        excluded_progress_files.add(os.path.abspath(progress_file))
+        excluded_progress_files.add(os.path.abspath(progress_file) + ".tmp")
+
     new_files = []
     for filename in os.listdir(directory):
         if filename in before or filename.endswith((".part", ".ytdl", ".temp")):
             continue
-        path = os.path.join(directory, filename)
+        path = os.path.abspath(os.path.join(directory, filename))
+        if path in excluded_progress_files:
+            continue
         if os.path.isfile(path):
             new_files.append(path)
 
