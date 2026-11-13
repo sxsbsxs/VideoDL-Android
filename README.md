@@ -37,6 +37,7 @@ The project uses:
 - Chaquopy 17.2.0
 - Python 3.11
 - yt-dlp 2026.10.26
+- Compose BOM 2026.06.01 (Compose 1.11.x, compatible with API 36)
 - Android SDK 36
 - NDK 27.2.12479018
 
@@ -56,7 +57,7 @@ Install JDK 17, Android SDK 36, NDK 27.2.12479018, CMake 3.22.1 and Gradle 8.13.
 gradle :app:assembleDebug
 ~~~
 
-Chaquopy downloads the Python runtime and the pinned yt-dlp package during the Gradle build, so the first build needs internet access.
+Chaquopy downloads the Python runtime and the pinned yt-dlp package during the Gradle build, so the first build needs internet access and Python 3.11 on the build machine.
 
 ## Architecture
 
