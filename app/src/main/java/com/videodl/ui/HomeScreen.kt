@@ -55,6 +55,7 @@ import coil.request.ImageRequest
 import okhttp3.Headers
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import java.io.File
 import com.videodl.model.VideoFormat
 import com.videodl.model.VideoInfo
 
@@ -454,10 +455,10 @@ private fun ErrorPanel(message: String) {
 @Composable
 private fun VideoResultCard(videoInfo: VideoInfo, onDownload: (VideoFormat) -> Unit) {
     val context = LocalContext.current
-    val coverRequest = remember(videoInfo.thumbnail, videoInfo.webpageUrl) {
+    val coverRequest = remember(videoInfo.thumbnail, videoInfo.thumbnailLocalPath, videoInfo.webpageUrl) {
         val referer = videoInfo.webpageUrl.ifBlank { "https://www.google.com/" }
         ImageRequest.Builder(context)
-            .data(videoInfo.thumbnail)
+            .data(videoInfo.thumbnailLocalPath.takeIf { it.isNotBlank() && File(it).isFile } ?: videoInfo.thumbnail)
             .headers(
                 Headers.Builder()
                     .add("Referer", referer)
@@ -501,7 +502,7 @@ private fun VideoResultCard(videoInfo: VideoInfo, onDownload: (VideoFormat) -> U
                     .clip(RoundedCornerShape(17.dp))
                     .background(MaterialTheme.colorScheme.surfaceVariant)
             ) {
-                if (videoInfo.thumbnail.isNotBlank()) {
+                if (videoInfo.thumbnailLocalPath.isNotBlank() || videoInfo.thumbnail.isNotBlank()) {
                     SubcomposeAsyncImage(
                         model = coverRequest,
                         contentDescription = "视频封面",
@@ -523,62 +524,40 @@ private fun VideoResultCard(videoInfo: VideoInfo, onDownload: (VideoFormat) -> U
                     ) {
                         Text(
                             duration,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                             color = Color.White,
-                            fontSize = 10.sp,
+                            fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text(
-                    videoInfo.title,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp,
-                    maxLines = 3,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    "来源：${videoInfo.extractor}  ·  ${durationText(videoInfo.durationSeconds)}",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 11.sp
-                )
-            }
-
-            Box(
-                Modifier
-                    .fillMaxWidth()
-                    .height(1.dp)
-                    .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.45f))
+            Text(
+                videoInfo.title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 3,
+                overflow = TextOverflow.Ellipsis
             )
 
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("可用画质", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Spacer(Modifier.weight(1f))
-                Text(
-                    "${videoInfo.formats.size} 种格式",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 10.sp
-                )
-            }
+            Text(
+                "可用下载格式",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
 
             if (videoInfo.formats.isEmpty()) {
                 Text(
-                    "没有找到可直接下载的单文件音视频格式。部分网站会分开发送视频和音频，需要完整集成 FFmpeg 后才能合并。",
+                    "网站没有提供可直接下载的音视频合并格式。当前版本尚未集成 FFmpeg，暂时不能合并独立音视频流。",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     lineHeight = 18.sp
                 )
             } else {
-                videoInfo.formats.forEachIndexed { index, format ->
-                    FormatRow(
-                        format = format,
-                        recommended = index == 0,
-                        onDownload = { onDownload(format) }
-                    )
+                videoInfo.formats.forEach { format ->
+                    FormatRow(format = format, onClick = { onDownload(format) })
                 }
             }
         }
@@ -588,95 +567,46 @@ private fun VideoResultCard(videoInfo: VideoInfo, onDownload: (VideoFormat) -> U
 @Composable
 private fun CoverPlaceholder(message: String) {
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+        modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.Center
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(7.dp)
-        ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Icon(
                 Icons.Outlined.VideoFile,
                 contentDescription = null,
-                modifier = Modifier.size(32.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(30.dp)
             )
-            Text(
-                message,
-                fontSize = 10.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
         }
     }
 }
 
 @Composable
-private fun FormatRow(format: VideoFormat, recommended: Boolean, onDownload: () -> Unit) {
+private fun FormatRow(format: VideoFormat, onClick: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.68f)
+        shape = RoundedCornerShape(15.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f)
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 13.dp, vertical = 11.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Surface(
-                shape = RoundedCornerShape(10.dp),
-                color = MaterialTheme.colorScheme.surface
-            ) {
-                Icon(
-                    Icons.Outlined.VideoFile,
-                    contentDescription = null,
-                    modifier = Modifier.padding(9.dp).size(20.dp),
-                    tint = MaterialTheme.colorScheme.onSurface
-                )
-            }
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(format.label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    if (recommended) {
-                        Text(
-                            "优先",
-                            fontSize = 9.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.surface)
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-                Text(
-                    format.fileSizeLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontSize = 10.sp
-                )
+                Text(format.label, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Text(format.fileSizeLabel, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
             }
             Button(
-                onClick = onDownload,
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 13.dp, vertical = 8.dp)
+                onClick = onClick,
+                shape = RoundedCornerShape(11.dp),
+                contentPadding = PaddingValues(horizontal = 13.dp, vertical = 7.dp)
             ) {
-                Text("下载", fontSize = 11.sp)
+                Icon(Icons.Outlined.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(5.dp))
+                Text("下载", fontSize = 12.sp)
             }
         }
-    }
-}
-
-private fun durationText(seconds: Double?): String {
-    if (seconds == null || seconds < 0.0) return "时长未知"
-    val total = seconds.toInt()
-    val hours = total / 3600
-    val minutes = total % 3600 / 60
-    val remainder = total % 60
-    return if (hours > 0) {
-        String.format("%d:%02d:%02d", hours, minutes, remainder)
-    } else {
-        String.format("%d:%02d", minutes, remainder)
     }
 }

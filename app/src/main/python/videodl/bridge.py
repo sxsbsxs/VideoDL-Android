@@ -1,7 +1,10 @@
 import json
 import os
 import re
+import hashlib
+import mimetypes
 from urllib.parse import urlparse
+from urllib.request import Request
 
 
 def _validate_url(url):
@@ -157,7 +160,64 @@ def _make_progress_hook(progress_file):
     return write_progress
 
 
-def parse_video(url):
+def _cache_thumbnail(ydl, info, webpage_url, cache_dir):
+    """Fetch a site's thumbnail through yt-dlp's cookie-aware request handler."""
+    if not cache_dir:
+        return ""
+    candidates = []
+    primary = info.get("thumbnail")
+    if primary:
+        candidates.append(primary)
+    thumbnails = info.get("thumbnails") or []
+    ranked = sorted(
+        (item for item in thumbnails if item.get("url")),
+        key=lambda item: (item.get("width") or 0) * (item.get("height") or 0),
+        reverse=True,
+    )
+    candidates.extend(item.get("url") for item in ranked)
+    seen = set()
+    os.makedirs(cache_dir, exist_ok=True)
+
+    for image_url in candidates:
+        if not isinstance(image_url, str) or image_url in seen:
+            continue
+        seen.add(image_url)
+        parsed = urlparse(image_url)
+        if parsed.scheme not in ("http", "https"):
+            continue
+        headers = dict(info.get("http_headers") or {})
+        headers.setdefault("User-Agent", "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0 Mobile Safari/537.36")
+        headers.setdefault("Referer", webpage_url)
+        try:
+            request = Request(image_url, headers=headers)
+            with ydl.urlopen(request) as response:
+                content_type = (response.headers.get("Content-Type") or "").split(";", 1)[0].lower()
+                payload = response.read(8 * 1024 * 1024 + 1)
+            if len(payload) > 8 * 1024 * 1024:
+                continue
+            if not (
+                payload.startswith(b"\xff\xd8\xff")
+                or payload.startswith(b"\x89PNG\r\n\x1a\n")
+                or payload.startswith((b"GIF87a", b"GIF89a"))
+                or (len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP")
+            ):
+                continue
+            extension = mimetypes.guess_extension(content_type) or os.path.splitext(parsed.path)[1] or ".jpg"
+            if extension == ".jpe":
+                extension = ".jpg"
+            filename = hashlib.sha256(image_url.encode("utf-8")).hexdigest() + extension
+            destination = os.path.join(cache_dir, filename)
+            temporary = destination + ".tmp"
+            with open(temporary, "wb") as stream:
+                stream.write(payload)
+            os.replace(temporary, destination)
+            return destination
+        except Exception:
+            continue
+    return ""
+
+
+def parse_video(url, cache_dir=None):
     value = _validate_url(url)
     yt_dlp = _extractor()
 
@@ -189,6 +249,10 @@ def parse_video(url):
                 value = retry_url
             except Exception as retry_error:
                 _friendly_site_error(retry_error)
+
+        thumbnail_local_path = _cache_thumbnail(
+            ydl, info or {}, (info or {}).get("webpage_url") or value, cache_dir
+        ) if info else ""
 
     if not info:
         raise RuntimeError("网站没有返回可用的视频信息。")
@@ -239,9 +303,14 @@ def parse_video(url):
         "title": info.get("title") or "未知视频",
         "extractor": info.get("extractor_key") or info.get("extractor") or "unknown",
         "thumbnail": info.get("thumbnail") or next(
-            (item.get("url") for item in reversed(info.get("thumbnails") or []) if item.get("url")),
+            (item.get("url") for item in sorted(
+                (entry for entry in (info.get("thumbnails") or []) if entry.get("url")),
+                key=lambda entry: (entry.get("width") or 0) * (entry.get("height") or 0),
+                reverse=True
+            )),
             ""
         ),
+        "thumbnail_local_path": thumbnail_local_path,
         "duration": info.get("duration"),
         "formats": cleaned_formats,
     }

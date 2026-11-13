@@ -5,6 +5,7 @@ data class VideoInfo(
     val title: String,
     val extractor: String,
     val thumbnail: String,
+    val thumbnailLocalPath: String,
     val durationSeconds: Double?,
     val formats: List<VideoFormat>
 )
@@ -29,7 +30,6 @@ data class VideoFormat(
             }
         }
 }
-
 
 data class DownloadedMedia(
     val uri: android.net.Uri,

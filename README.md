@@ -8,12 +8,12 @@
 - **C++ + Android NDK:** native bridge prepared for FFmpeg integration.
 - **No self-hosted backend:** extraction runs on the Android device and connects directly to the target website.
 
-## Current milestone: 0.4.0
+## Current milestone: 0.4.1
 
 - Refined monochrome UI with an Apple-inspired visual language and IDM-style workflow.
 - Paste video links from the clipboard and parse them locally with yt-dlp.
 - Show title, a larger landscape cover, duration and available progressive formats.
-- Show visible cover-loading and cover-error placeholders when a site blocks or omits its thumbnail.
+- Fetch thumbnails through yt-dlp’s cookie-aware network session and cache successful images locally before display; retain clear fallback states when a site omits or blocks a thumbnail.
 - Browse completed downloads in the app, including locally generated video thumbnails, file sizes and save dates.
 - Open or delete saved files from the Downloads and Files tabs.
 - Automatically refresh the Downloads tab while it is visible.

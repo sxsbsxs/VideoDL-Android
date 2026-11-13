@@ -1,6 +1,7 @@
 package com.videodl.data
 
 import android.content.Context
+import java.io.File
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.videodl.model.VideoFormat
@@ -26,7 +27,11 @@ object PythonBridge {
         }
 
         val module = Python.getInstance().getModule("videodl.bridge")
-        val jsonText = module.callAttr("parse_video", normalizedUrl).toString()
+        val jsonText = module.callAttr(
+            "parse_video",
+            normalizedUrl,
+            File(context.cacheDir, "covers").absolutePath
+        ).toString()
         val root = JSONObject(jsonText)
 
         val formats = mutableListOf<VideoFormat>()
@@ -56,6 +61,7 @@ object PythonBridge {
             title = root.optString("title", "未知视频"),
             extractor = root.optString("extractor", "unknown"),
             thumbnail = root.optString("thumbnail", ""),
+            thumbnailLocalPath = root.optString("thumbnail_local_path", ""),
             durationSeconds = if (root.isNull("duration")) null else root.optDouble("duration"),
             formats = formats
         )
