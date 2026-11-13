@@ -14,8 +14,8 @@ android {
         applicationId = "com.videodl"
         minSdk = 24
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -84,13 +84,13 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 
-    // Compose 1.11.x is compatible with compileSdk 36 and AGP 8.13.
-    // Compose 1.12.x requires API 37 and AGP 9.1+, so keep the BOM pinned here.
+    // Keep Compose on the 1.11.x line for AGP 8.13 / compileSdk 36.
     implementation(platform("androidx.compose:compose-bom:2026.06.01"))
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.material:material-icons-extended")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
 

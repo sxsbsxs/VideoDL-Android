@@ -12,6 +12,24 @@ def _validate_url(url):
     return value
 
 
+def _friendly_site_error(error):
+    message = str(error)
+    if re.search(r"HTTP Error 412|HTTP 412|412: Precondition Failed|412 Precondition Failed", message, re.I):
+        raise RuntimeError(
+            "目标网站返回 HTTP 412（Precondition Failed），拒绝了这次解析或取流请求。"
+            "这通常是网站的请求校验、登录状态或临时访问限制导致的，不是 VideoDL 构建失败。"
+            "请先确认该视频能在网站官方页面正常播放；若网站要求登录，需使用你有权访问的账号。"
+            "当前版本尚未提供 Cookie 导入。VideoDL 不会绕过 DRM 或网站访问控制。"
+        ) from error
+
+    if re.search(r"HTTP Error 429|HTTP 429|Too Many Requests", message, re.I):
+        raise RuntimeError(
+            "目标网站暂时限制了请求频率（HTTP 429）。请稍后再试，避免短时间重复解析。"
+        ) from error
+
+    raise RuntimeError(message[:600] or error.__class__.__name__) from error
+
+
 def _extractor():
     try:
         import yt_dlp
@@ -30,11 +48,16 @@ def parse_video(url):
         "noplaylist": True,
         "skip_download": True,
         "ignoreerrors": False,
-        "socket_timeout": 20,
+        "socket_timeout": 25,
+        "retries": 2,
+        "extractor_retries": 2,
     }
 
-    with yt_dlp.YoutubeDL(options) as ydl:
-        info = ydl.extract_info(value, download=False)
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            info = ydl.extract_info(value, download=False)
+    except Exception as error:
+        _friendly_site_error(error)
 
     if not info:
         raise RuntimeError("网站没有返回可用的视频信息。")
@@ -111,13 +134,17 @@ def download_video(url, format_id, output_dir):
         "overwrites": False,
         "ignoreerrors": False,
         "socket_timeout": 30,
+        "retries": 2,
         "format": selected_format if selected_format != "best" else "best[acodec!=none]/best",
         "outtmpl": os.path.join(directory, "%(title).180B [%(id)s] %(epoch)s.%(ext)s"),
         "windowsfilenames": False,
     }
 
-    with yt_dlp.YoutubeDL(options) as ydl:
-        ydl.download([value])
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([value])
+    except Exception as error:
+        _friendly_site_error(error)
 
     new_files = []
     for filename in os.listdir(directory):
