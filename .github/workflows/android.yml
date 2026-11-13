@@ -28,6 +28,20 @@ jobs:
           distribution: temurin
           java-version: "17"
 
+      # Chaquopy needs a host interpreter matching the Python version
+      # embedded in the Android app (3.11 in app/build.gradle.kts).
+      - name: Set up Python 3.11 for Chaquopy
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Verify build toolchain
+        run: |
+          java -version
+          python3.11 --version
+          python --version
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
