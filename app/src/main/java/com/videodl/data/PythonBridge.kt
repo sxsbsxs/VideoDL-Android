@@ -12,8 +12,13 @@ import org.json.JSONObject
 object PythonBridge {
     suspend fun parseVideo(context: Context, url: String): VideoInfo = withContext(Dispatchers.IO) {
         val trimmedUrl = url.trim()
-        require(trimmedUrl.startsWith("https://") || trimmedUrl.startsWith("http://")) {
-            "请输入完整的视频网址（http 或 https）。"
+        require(trimmedUrl.isNotBlank() && !trimmedUrl.contains(' ')) {
+            "请输入有效的视频网址。"
+        }
+        val normalizedUrl = when {
+            trimmedUrl.startsWith("https://", ignoreCase = true) -> trimmedUrl
+            trimmedUrl.startsWith("http://", ignoreCase = true) -> trimmedUrl
+            else -> "https://" + trimmedUrl
         }
 
         if (!Python.isStarted()) {
@@ -21,7 +26,7 @@ object PythonBridge {
         }
 
         val module = Python.getInstance().getModule("videodl.bridge")
-        val jsonText = module.callAttr("parse_video", trimmedUrl).toString()
+        val jsonText = module.callAttr("parse_video", normalizedUrl).toString()
         val root = JSONObject(jsonText)
 
         val formats = mutableListOf<VideoFormat>()
@@ -47,7 +52,7 @@ object PythonBridge {
         }
 
         VideoInfo(
-            webpageUrl = root.optString("webpage_url", trimmedUrl),
+            webpageUrl = root.optString("webpage_url", normalizedUrl),
             title = root.optString("title", "未知视频"),
             extractor = root.optString("extractor", "unknown"),
             thumbnail = root.optString("thumbnail", ""),

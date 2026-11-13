@@ -112,7 +112,7 @@ def download_video(url, format_id, output_dir):
         "ignoreerrors": False,
         "socket_timeout": 30,
         "format": selected_format if selected_format != "best" else "best[acodec!=none]/best",
-        "outtmpl": os.path.join(directory, "%(title).180B [%(id)s].%(ext)s"),
+        "outtmpl": os.path.join(directory, "%(title).180B [%(id)s] %(epoch)s.%(ext)s"),
         "windowsfilenames": False,
     }
 
