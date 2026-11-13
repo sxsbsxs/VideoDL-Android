@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+**/build/
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.hprof
+
+# Native build
+.externalNativeBuild/
+.cxx/
+*.so
+*.o
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db
