@@ -8,11 +8,13 @@ VideoDL uses third-party software. Their respective licenses remain applicable.
 - License: The yt-dlp project is released into the public domain under the Unlicense (see the upstream repository for the current license text).
 - The APK obtains the pinned Python package during the build; the yt-dlp source is not vendored in this repository.
 
-## FFmpeg
+## FFmpegKit maintained Android package
 
-- Project: https://ffmpeg.org/
-- FFmpeg shared libraries are **not included** in the current APK.
-- Any future FFmpeg build must ship the exact license text and source/offers required by its configuration. FFmpeg licensing depends on enabled build options: a build with GPL components is GPL, while a build using only LGPL-compatible components can be distributed under the corresponding LGPL terms.
+- Project: https://github.com/ffmpegkit-maintained/ffmpeg
+- Maven coordinate: dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.9
+- License: LGPL-3.0 (non-GPL full artifact).
+- The package provides Android native FFmpeg libraries and the FFmpegKit Java API for local audio/video stream muxing.
+- Keep the upstream license and corresponding source / relinking information available when distributing the APK, as required by LGPL-3.0.
 
 ## Chaquopy
 

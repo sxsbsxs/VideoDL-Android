@@ -610,3 +610,17 @@ private fun FormatRow(format: VideoFormat, onClick: () -> Unit) {
         }
     }
 }
+
+
+private fun durationText(seconds: Double?): String {
+    if (seconds == null || seconds < 0.0) return "时长未知"
+    val total = seconds.toInt()
+    val hours = total / 3600
+    val minutes = total % 3600 / 60
+    val remainder = total % 60
+    return if (hours > 0) {
+        String.format("%d:%02d:%02d", hours, minutes, remainder)
+    } else {
+        String.format("%d:%02d", minutes, remainder)
+    }
+}

@@ -5,20 +5,23 @@
 - **Kotlin + Jetpack Compose:** native app UI, navigation and app state.
 - **Java:** Android foreground download service and MediaStore publishing.
 - **Python + yt-dlp:** on-device site extraction, metadata and downloading.
-- **C++ + Android NDK:** native bridge prepared for FFmpeg integration.
+- **C++ + FFmpegKit:** Android native FFmpeg libraries and JNI availability check for on-device stream merging.
 - **No self-hosted backend:** extraction runs on the Android device and connects directly to the target website.
 
-## Current milestone: 0.4.1
+## Current milestone: 0.5.0
 
 - Refined monochrome UI with an Apple-inspired visual language and IDM-style workflow.
 - Paste video links from the clipboard and parse them locally with yt-dlp.
-- Show title, a larger landscape cover, duration and available progressive formats.
+- Show title, a larger landscape cover, duration, progressive formats and adaptive format pairs.
 - Fetch thumbnails through yt-dlp’s cookie-aware network session and cache successful images locally before display; retain clear fallback states when a site omits or blocks a thumbnail.
 - Browse completed downloads in the app, including locally generated video thumbnails, file sizes and save dates.
 - Open or delete saved files from the Downloads and Files tabs.
 - Automatically refresh the Downloads tab while it is visible.
-- Offer formats which contain both audio and video in one stream.
+- Offer progressive formats and adaptive video+audio format pairs; adaptive streams are downloaded separately and muxed locally with FFmpegKit.
 - Start a download in an Android foreground service.
+- Maintain a persistent serial download queue with per-task status, progress, speed and ETA.
+- Pause and continue downloads using yt-dlp partial files and continued download support.
+- Import a Netscape-format cookies.txt file into private no-backup app storage and use it for parsing and downloading.
 - Show download percentage, transfer speed and estimated remaining time in the Android foreground notification.
 - Publish completed downloads to Download/VideoDL on Android 10 and newer.
 - Display a clearer explanation when a site responds with HTTP 412 or HTTP 429.
@@ -29,9 +32,7 @@
 
 ## Important current limitations
 
-- The current APK does **not** bundle FFmpeg shared libraries. The C++ JNI module checks whether libavformat.so is present, but a clean build will report it as unavailable.
-- To avoid silently creating video-only files, the current version only lists formats which already contain audio and video together. Separate high-resolution video/audio streams cannot yet be merged in this build.
-- Pause/resume controls, a persistent multi-task queue, in-app progress history, secure cookie import, and merging separate high-resolution video/audio streams remain follow-up work.
+- Pause/resume uses yt-dlp temporary partial files. A pause takes effect at the next download progress callback; a currently blocked network read may take time to return. The queue is persisted locally, but it is a single-download-at-a-time queue.
 - On Android 7–9, downloaded files live in the app-specific Download/VideoDL folder; on Android 10 and newer, completed files are published to Download/VideoDL.
 - DRM-protected streams and content which requires bypassing access controls are not supported.
 - Some sites may require an authorized login or cookies, and some websites may temporarily block automated requests.

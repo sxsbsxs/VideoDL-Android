@@ -2,6 +2,6 @@
 
 The NDK module is built into every APK and exposes a JNI capability check for FFmpeg.
 
-The first milestone does not bundle FFmpeg shared libraries yet. The check therefore returns false on a clean build. The Python downloader currently offers formats which already contain both audio and video, avoiding a false claim that separate streams can be merged without FFmpeg.
+The Android FFmpegKit AAR supplies the native FFmpeg shared libraries for arm64-v8a and x86_64. The JNI check loads libavformat.so and verifies the avformat_version symbol.
 
-When FFmpeg is added, its Android ABI libraries must be built and packaged under the matching jniLibs ABI directory, with the corresponding license notices and build configuration.
+The Java foreground service uses the FFmpegKit API to mux separately downloaded video and audio streams into a local Matroska file using stream copy (no re-encoding). The application uses the non-GPL LGPL artifact; see THIRD_PARTY_NOTICES.md for license information.

@@ -16,7 +16,8 @@ data class VideoFormat(
     val extension: String,
     val height: Int?,
     val fps: Double?,
-    val fileSizeBytes: Long?
+    val fileSizeBytes: Long?,
+    val requiresMerge: Boolean = false
 ) {
     val fileSizeLabel: String
         get() {

@@ -13,8 +13,12 @@ import android.os.Environment;
 import android.os.IBinder;
 import android.provider.MediaStore;
 
+import com.arthenica.ffmpegkit.FFmpegKit;
+import com.arthenica.ffmpegkit.ReturnCode;
 import com.chaquo.python.PyObject;
 import com.chaquo.python.Python;
+import com.chaquo.python.android.AndroidPlatform;
+import com.videodl.data.DownloadQueueStore;
 
 import org.json.JSONObject;
 
@@ -33,16 +37,35 @@ import java.util.concurrent.TimeUnit;
 public class DownloadForegroundService extends Service {
     private static final String CHANNEL_ID = "videodl_downloads";
     private static final int NOTIFICATION_ID = 4101;
-    private static final String EXTRA_URL = "videodl.extra.URL";
-    private static final String EXTRA_FORMAT = "videodl.extra.FORMAT";
+    private static final String ACTION_RUN = "com.videodl.action.RUN_QUEUE";
 
     private ExecutorService executor;
     private ScheduledExecutorService progressExecutor;
+    private final Object workerLock = new Object();
+    private boolean processing = false;
 
-    public static void start(Context context, String url, String formatId) {
+    public static String start(Context context, String url, String formatId, String title) {
+        String id = DownloadQueueStore.enqueue(context, url, formatId, title);
+        kick(context);
+        return id;
+    }
+
+    public static void pauseTask(Context context, String taskId) {
+        DownloadQueueStore.pause(context, taskId);
+    }
+
+    public static void resumeTask(Context context, String taskId) {
+        DownloadQueueStore.resume(context, taskId);
+        kick(context);
+    }
+
+    public static boolean removeTask(Context context, String taskId) {
+        return DownloadQueueStore.remove(context, taskId);
+    }
+
+    private static void kick(Context context) {
         Intent intent = new Intent(context, DownloadForegroundService.class);
-        intent.putExtra(EXTRA_URL, url);
-        intent.putExtra(EXTRA_FORMAT, formatId);
+        intent.setAction(ACTION_RUN);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(intent);
         } else {
@@ -56,36 +79,47 @@ public class DownloadForegroundService extends Service {
         createNotificationChannel();
         executor = Executors.newSingleThreadExecutor();
         progressExecutor = Executors.newSingleThreadScheduledExecutor();
+        DownloadQueueStore.recoverInterrupted(this);
     }
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         startForeground(NOTIFICATION_ID, notification(
-                "正在准备下载",
-                "VideoDL 正在启动解析引擎。",
+                "VideoDL 下载队列",
+                "正在准备下载任务…",
                 true
         ));
-
-        if (intent == null) {
-            stopSelf(startId);
-            return START_NOT_STICKY;
+        synchronized (workerLock) {
+            if (!processing) {
+                processing = true;
+                executor.execute(this::processQueue);
+            }
         }
-
-        String url = intent.getStringExtra(EXTRA_URL);
-        String formatId = intent.getStringExtra(EXTRA_FORMAT);
-        executor.execute(() -> runDownload(url, formatId, startId));
-        return START_NOT_STICKY;
+        return START_STICKY;
     }
 
-    private void runDownload(String url, String formatId, int startId) {
+    private void processQueue() {
+        while (true) {
+            DownloadQueueStore.Task task;
+            synchronized (workerLock) {
+                task = DownloadQueueStore.nextQueued(this);
+                if (task == null) {
+                    processing = false;
+                    stopForeground(true);
+                    stopSelf();
+                    return;
+                }
+            }
+            runTask(task);
+        }
+    }
+
+    private void runTask(DownloadQueueStore.Task task) {
         File progressFile = null;
         ScheduledFuture<?> progressTask = null;
+        File pauseFile = DownloadQueueStore.pauseFile(this, task.id);
 
         try {
-            if (url == null || url.trim().isEmpty()) {
-                throw new IllegalArgumentException("视频网址为空。");
-            }
-
             File base = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
             if (base == null) base = getFilesDir();
             File outputDir = new File(base, "VideoDL");
@@ -93,89 +127,129 @@ public class DownloadForegroundService extends Service {
                 throw new IllegalStateException("无法创建下载目录。");
             }
 
-            progressFile = new File(outputDir, ".progress-" + startId + ".json");
+            progressFile = new File(outputDir, ".progress-" + task.id + ".json");
             if (progressFile.exists()) progressFile.delete();
+            pauseFile.delete();
 
-            updateNotification("正在下载", "正在连接目标网站…", true);
+            updateNotification("正在下载", task.title, true);
 
             if (!Python.isStarted()) {
-                throw new IllegalStateException("Python 解析环境尚未启动，请返回首页重新解析后重试。");
+                Python.start(new AndroidPlatform(getApplicationContext()));
             }
 
             final File watchedProgressFile = progressFile;
             progressTask = progressExecutor.scheduleWithFixedDelay(
-                    () -> updateProgressFromFile(watchedProgressFile),
+                    () -> updateProgressFromFile(task, watchedProgressFile),
                     0,
                     1,
                     TimeUnit.SECONDS
             );
 
+            String cookiePath = DownloadQueueStore.getCookiePath(this);
             PyObject result = Python.getInstance()
                     .getModule("videodl.bridge")
                     .callAttr(
                             "download_video",
-                            url,
-                            formatId == null ? "best" : formatId,
+                            task.url,
+                            task.formatId == null ? "best" : task.formatId,
                             outputDir.getAbsolutePath(),
-                            progressFile.getAbsolutePath()
+                            progressFile.getAbsolutePath(),
+                            cookiePath,
+                            pauseFile.getAbsolutePath(),
+                            task.id
                     );
 
-            File downloaded = new File(result.toString());
-            if (!downloaded.isFile()) {
+            String resultText = result.toString();
+            File downloaded;
+            if (resultText.startsWith("{")) {
+                JSONObject merge = new JSONObject(resultText);
+                if (!merge.optBoolean("merge", false)) {
+                    throw new IllegalStateException("下载引擎返回了无法识别的结果。");
+                }
+                File video = new File(merge.getString("video_path"));
+                File audio = new File(merge.getString("audio_path"));
+                downloaded = new File(merge.getString("output_path"));
+                updateNotification("正在合并音视频", task.title, true);
+                DownloadQueueStore.update(this, task.id, "RUNNING", 99, "正在使用 FFmpeg 合并音频与视频");
+                String command = "-y -i " + quote(video.getAbsolutePath())
+                        + " -i " + quote(audio.getAbsolutePath())
+                        + " -map 0:v:0 -map 1:a:0 -c copy -map_metadata 0 "
+                        + quote(downloaded.getAbsolutePath());
+                com.arthenica.ffmpegkit.Session session = FFmpegKit.execute(command);
+                if (!ReturnCode.isSuccess(session.getReturnCode()) || !downloaded.isFile() || downloaded.length() == 0L) {
+                    String log = session.getFailStackTrace();
+                    throw new IllegalStateException("FFmpeg 合并失败：" + (log == null ? "请检查音视频编码格式。" : log));
+                }
+                video.delete();
+                audio.delete();
+            } else {
+                downloaded = new File(resultText);
+            }
+
+            if (!downloaded.isFile() || downloaded.length() == 0L) {
                 throw new IllegalStateException("解析器没有返回有效的视频文件。");
+            }
+            if (pauseFile.exists()) {
+                DownloadQueueStore.update(this, task.id, "PAUSED", 0, "已暂停，可继续下载");
+                updateNotification("下载已暂停", task.title, false);
+                return;
             }
 
             String savedAt = publishToDownloads(downloaded);
-            updateNotification("下载完成", downloaded.getName() + " · " + savedAt, false);
+            DownloadQueueStore.update(this, task.id, "COMPLETED", 100, "下载完成 · " + savedAt);
+            updateNotification("下载完成", task.title + " · " + savedAt, false);
         } catch (Throwable error) {
-            String message = error.getMessage();
-            if (message == null || message.trim().isEmpty()) {
-                message = error.getClass().getSimpleName();
+            if (pauseFile.exists() || (error.getMessage() != null && error.getMessage().contains("VIDEODL_PAUSED"))) {
+                DownloadQueueStore.update(this, task.id, "PAUSED", 0, "已暂停，继续时会尝试续传");
+                updateNotification("下载已暂停", task.title, false);
+            } else {
+                String message = error.getMessage();
+                if (message == null || message.trim().isEmpty()) message = error.getClass().getSimpleName();
+                if (message.length() > 180) message = message.substring(0, 180);
+                DownloadQueueStore.update(this, task.id, "FAILED", 0, message);
+                updateNotification("下载失败", task.title + " · " + message, false);
             }
-            updateNotification("下载失败", message, false);
         } finally {
-            if (progressTask != null) {
-                progressTask.cancel(false);
-            }
-            if (progressFile != null && progressFile.exists()) {
-                progressFile.delete();
-            }
-            stopSelf(startId);
+            if (progressTask != null) progressTask.cancel(false);
+            if (progressFile != null && progressFile.exists()) progressFile.delete();
+            pauseFile.delete();
         }
     }
 
-    private void updateProgressFromFile(File progressFile) {
-        if (progressFile == null || !progressFile.isFile()) return;
+    private String quote(String path) {
+        return "\"" + path.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+    }
 
+    private void updateProgressFromFile(DownloadQueueStore.Task task, File progressFile) {
+        if (progressFile == null || !progressFile.isFile()) return;
         try {
             StringBuilder json = new StringBuilder();
             try (BufferedReader reader = new BufferedReader(new FileReader(progressFile))) {
                 String line;
                 while ((line = reader.readLine()) != null) json.append(line);
             }
-
             JSONObject data = new JSONObject(json.toString());
             String status = data.optString("status", "");
             if ("downloading".equals(status)) {
                 long downloaded = data.optLong("downloaded_bytes", 0L);
                 long total = data.optLong("total_bytes", data.optLong("total_bytes_estimate", 0L));
                 int percent = total > 0L
-                        ? (int) Math.min(100L, Math.max(0L, downloaded * 100L / total))
-                        : -1;
+                        ? (int) Math.min(99L, Math.max(0L, downloaded * 100L / total))
+                        : 0;
                 double speed = data.optDouble("speed", 0.0);
                 int eta = data.optInt("eta", -1);
-
                 StringBuilder detail = new StringBuilder();
-                if (percent >= 0) detail.append(percent).append("%");
+                if (percent > 0) detail.append(percent).append("%");
                 else detail.append("正在接收数据");
                 if (speed > 0.0) detail.append(" · ").append(formatSpeed(speed));
                 if (eta >= 0) detail.append(" · 剩余 ").append(formatDuration(eta));
-                updateProgressNotification("正在下载", detail.toString(), percent, true);
+                DownloadQueueStore.updateProgress(this, task.id, percent, detail.toString());
+                updateProgressNotification("正在下载", task.title + " · " + detail, percent, true);
             } else if ("finished".equals(status)) {
-                updateProgressNotification("正在整理文件", "数据已下载，正在完成文件处理。", 100, true);
+                updateProgressNotification("正在整理文件", task.title, 99, true);
             }
         } catch (Exception ignored) {
-            // The Python hook writes atomically; a partially replaced status file is simply retried.
+            // A progress file is atomically replaced by the Python hook; retry on the next tick.
         }
     }
 
@@ -190,19 +264,15 @@ public class DownloadForegroundService extends Service {
     }
 
     private String formatDuration(int seconds) {
-        if (seconds < 0) return "未知";
         int minutes = seconds / 60;
         int remainder = seconds % 60;
-        if (minutes >= 60) {
-            return String.format(Locale.US, "%d:%02d:%02d", minutes / 60, minutes % 60, remainder);
-        }
-        return String.format(Locale.US, "%d:%02d", minutes, remainder);
+        return minutes >= 60
+                ? String.format(Locale.US, "%d:%02d:%02d", minutes / 60, minutes % 60, remainder)
+                : String.format(Locale.US, "%d:%02d", minutes, remainder);
     }
 
     private String publishToDownloads(File source) throws Exception {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-            return source.getAbsolutePath();
-        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return source.getAbsolutePath();
 
         String mime = mimeType(source.getName());
         ContentValues values = new ContentValues();
@@ -213,18 +283,14 @@ public class DownloadForegroundService extends Service {
 
         Uri collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
         Uri destination = getContentResolver().insert(collection, values);
-        if (destination == null) {
-            throw new IllegalStateException("无法写入系统下载目录。");
-        }
+        if (destination == null) throw new IllegalStateException("无法写入系统下载目录。");
 
         try (FileInputStream input = new FileInputStream(source);
              OutputStream output = getContentResolver().openOutputStream(destination)) {
             if (output == null) throw new IllegalStateException("无法打开目标文件。");
             byte[] buffer = new byte[64 * 1024];
             int count;
-            while ((count = input.read(buffer)) != -1) {
-                output.write(buffer, 0, count);
-            }
+            while ((count = input.read(buffer)) != -1) output.write(buffer, 0, count);
             output.flush();
         } catch (Exception error) {
             getContentResolver().delete(destination, null, null);
@@ -248,10 +314,9 @@ public class DownloadForegroundService extends Service {
     }
 
     private Notification.Builder notificationBuilder() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            return new Notification.Builder(this, CHANNEL_ID);
-        }
-        return new Notification.Builder(this);
+        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                ? new Notification.Builder(this, CHANNEL_ID)
+                : new Notification.Builder(this);
     }
 
     private Notification notification(String title, String message, boolean ongoing) {
@@ -266,35 +331,29 @@ public class DownloadForegroundService extends Service {
 
     private void updateNotification(String title, String message, boolean ongoing) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        if (manager != null) {
-            manager.notify(NOTIFICATION_ID, notification(title, message, ongoing));
-        }
+        if (manager != null) manager.notify(NOTIFICATION_ID, notification(title, message, ongoing));
     }
 
     private void updateProgressNotification(String title, String message, int progress, boolean ongoing) {
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
         if (manager == null) return;
-
-        boolean indeterminate = progress < 0;
-        Notification notification = notificationBuilder()
+        Notification note = notificationBuilder()
                 .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setContentTitle(title)
                 .setContentText(message)
                 .setOngoing(ongoing)
                 .setOnlyAlertOnce(true)
-                .setProgress(100, indeterminate ? 0 : progress, indeterminate)
+                .setProgress(100, Math.max(0, Math.min(100, progress)), false)
                 .build();
-        manager.notify(NOTIFICATION_ID, notification);
+        manager.notify(NOTIFICATION_ID, note);
     }
 
     private void createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(
-                    CHANNEL_ID,
-                    "VideoDL 下载",
-                    NotificationManager.IMPORTANCE_LOW
+                    CHANNEL_ID, "VideoDL 下载", NotificationManager.IMPORTANCE_LOW
             );
-            channel.setDescription("显示 VideoDL 后台下载进度与速度");
+            channel.setDescription("显示队列中下载任务的进度与速度");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) manager.createNotificationChannel(channel);
         }

@@ -2,6 +2,7 @@ package com.videodl.ui
 
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,6 +18,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,6 +33,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.videodl.data.PythonBridge
 import com.videodl.data.LocalMediaRepository
+import com.videodl.data.DownloadQueueStore
 import com.videodl.engine.NativeBridge
 import com.videodl.model.VideoInfo
 import com.videodl.model.DownloadedMedia
@@ -38,6 +42,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.File
 
 private enum class AppPage(val label: String, val icon: ImageVector) {
     HOME("首页", Icons.Outlined.Home),
@@ -59,6 +65,25 @@ fun VideoDLApp() {
     var localFiles by remember { mutableStateOf<List<DownloadedMedia>>(emptyList()) }
     var loadingFiles by remember { mutableStateOf(false) }
     var refreshFilesKey by remember { mutableStateOf(0) }
+    var downloadTasks by remember { mutableStateOf(DownloadQueueStore.list(context)) }
+    var hasCookie by remember { mutableStateOf(DownloadQueueStore.hasCookieFile(context)) }
+
+    val cookiePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                val result = runCatching {
+                    withContext(Dispatchers.IO) { importCookieFile(context, uri) }
+                }
+                result.onSuccess { file ->
+                    DownloadQueueStore.setCookiePath(context, file.absolutePath)
+                    hasCookie = true
+                    Toast.makeText(context, "Cookie 文件已安全导入", Toast.LENGTH_LONG).show()
+                }.onFailure { error ->
+                    Toast.makeText(context, error.message ?: "Cookie 文件导入失败", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
+    }
 
     LaunchedEffect(page, refreshFilesKey) {
         if (page == AppPage.DOWNLOADS.name || page == AppPage.FILES.name) {
@@ -68,12 +93,15 @@ fun VideoDLApp() {
                     localFiles = withContext(Dispatchers.IO) {
                         LocalMediaRepository.list(context)
                     }
+                    downloadTasks = withContext(Dispatchers.IO) {
+                        DownloadQueueStore.list(context)
+                    }
                 } catch (_: Exception) {
                     localFiles = emptyList()
                 } finally {
                     loadingFiles = false
                 }
-                if (page == AppPage.DOWNLOADS.name) delay(2500L)
+                if (page == AppPage.DOWNLOADS.name) delay(1000L)
             } while (page == AppPage.DOWNLOADS.name)
         }
     }
@@ -172,7 +200,7 @@ fun VideoDLApp() {
                     val current = videoInfo
                     if (current != null) {
                         runCatching {
-                            DownloadForegroundService.start(context, current.webpageUrl, format.id)
+                            DownloadForegroundService.start(context, current.webpageUrl, format.id, current.title)
                         }.onSuccess {
                             Toast.makeText(context, "已提交下载任务", Toast.LENGTH_SHORT).show()
                             page = AppPage.DOWNLOADS.name
@@ -210,7 +238,11 @@ fun VideoDLApp() {
                 loading = loadingFiles,
                 onRefresh = { refreshFilesKey++ },
                 onOpen = ::openDownloadedFile,
-                onDelete = ::deleteDownloadedFile
+                onDelete = ::deleteDownloadedFile,
+                tasks = downloadTasks,
+                onPauseTask = { DownloadForegroundService.pauseTask(context, it) },
+                onResumeTask = { DownloadForegroundService.resumeTask(context, it) },
+                onRemoveTask = { DownloadForegroundService.removeTask(context, it); downloadTasks = DownloadQueueStore.list(context) }
             )
             AppPage.FILES -> FilesScreen(
                 contentPadding = contentPadding,
@@ -220,7 +252,54 @@ fun VideoDLApp() {
                 onOpen = ::openDownloadedFile,
                 onDelete = ::deleteDownloadedFile
             )
-            AppPage.SETTINGS -> SettingsScreen(contentPadding, ffmpegAvailable)
+            AppPage.SETTINGS -> SettingsScreen(
+                contentPadding = contentPadding,
+                ffmpegAvailable = ffmpegAvailable,
+                hasCookie = hasCookie,
+                onImportCookies = { cookiePicker.launch(arrayOf("*/*")) },
+                onClearCookies = {
+                    DownloadQueueStore.getCookiePath(context).takeIf { it.isNotBlank() }?.let { File(it).delete() }
+                    DownloadQueueStore.setCookiePath(context, null)
+                    hasCookie = false
+                    Toast.makeText(context, "已删除 Cookie 文件", Toast.LENGTH_SHORT).show()
+                }
+            )
         }
     }
+}
+
+
+private fun importCookieFile(context: Context, uri: Uri): File {
+    val input = context.contentResolver.openInputStream(uri)
+        ?: throw IllegalArgumentException("无法读取所选文件。")
+    val bytes = input.use { stream ->
+        val output = ByteArrayOutputStream()
+        val buffer = ByteArray(8192)
+        var total = 0
+        while (true) {
+            val count = stream.read(buffer)
+            if (count < 0) break
+            total += count
+            require(total <= 2 * 1024 * 1024) { "Cookie 文件不能超过 2 MiB。" }
+            output.write(buffer, 0, count)
+        }
+        output.toByteArray()
+    }
+    val text = bytes.toString(Charsets.UTF_8).removePrefix("\uFEFF")
+    val hasCookieRow = text.lineSequence().any { line ->
+        val normalized = line.removePrefix("#HttpOnly_")
+        (!line.startsWith("#") || line.startsWith("#HttpOnly_")) && normalized.split('\t').size >= 7
+    }
+    require(hasCookieRow) {
+        "文件格式不正确。请导入浏览器导出的 Netscape cookies.txt 文件。"
+    }
+
+    val destination = File(File(context.noBackupFilesDir, "cookies"), "cookies.txt")
+    destination.parentFile?.mkdirs()
+    destination.writeBytes(bytes)
+    destination.setReadable(false, false)
+    destination.setWritable(false, false)
+    destination.setReadable(true, true)
+    destination.setWritable(true, true)
+    return destination
 }

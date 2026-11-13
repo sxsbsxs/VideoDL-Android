@@ -2,6 +2,7 @@ package com.videodl.data
 
 import android.content.Context
 import java.io.File
+import com.videodl.data.DownloadQueueStore
 import com.chaquo.python.Python
 import com.chaquo.python.android.AndroidPlatform
 import com.videodl.model.VideoFormat
@@ -30,7 +31,8 @@ object PythonBridge {
         val jsonText = module.callAttr(
             "parse_video",
             normalizedUrl,
-            File(context.cacheDir, "covers").absolutePath
+            File(context.cacheDir, "covers").absolutePath,
+            DownloadQueueStore.getCookiePath(context)
         ).toString()
         val root = JSONObject(jsonText)
 
@@ -45,13 +47,16 @@ object PythonBridge {
                 val extension = item.optString("ext", "unknown")
                 val heightLabel = if (height != null && height > 0) height.toString() + "p" else "原始画质"
                 val fpsLabel = if (fps != null && fps > 0.0) " · " + fps.toInt() + "fps" else ""
+                val requiresMerge = item.optBoolean("requires_merge", false)
+                val mergeLabel = if (requiresMerge) " · 需合并" else ""
                 formats += VideoFormat(
                     id = item.optString("format_id"),
-                    label = heightLabel + " · " + extension + fpsLabel,
+                    label = heightLabel + " · " + extension + fpsLabel + mergeLabel,
                     extension = extension,
                     height = height,
                     fps = fps,
-                    fileSizeBytes = size
+                    fileSizeBytes = size,
+                    requiresMerge = requiresMerge
                 )
             }
         }

@@ -32,6 +32,9 @@ import androidx.compose.material.icons.outlined.VideoFile
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -51,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.videodl.data.LocalMediaRepository
+import com.videodl.data.DownloadQueueStore
 import com.videodl.model.DownloadedMedia
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -65,13 +69,23 @@ fun DownloadsScreen(
     loading: Boolean,
     onRefresh: () -> Unit,
     onOpen: (DownloadedMedia) -> Unit,
-    onDelete: (DownloadedMedia) -> Unit
+    onDelete: (DownloadedMedia) -> Unit,
+    tasks: List<DownloadQueueStore.Task>,
+    onPauseTask: (String) -> Unit,
+    onResumeTask: (String) -> Unit,
+    onRemoveTask: (String) -> Unit
 ) {
     PageFrame(contentPadding) {
         PageHeader(
             eyebrow = "YOUR DOWNLOADS",
             title = "下载任务",
-            subtitle = "这里显示已完成并保存到本机的文件。"
+            subtitle = "队列会保存在本机；每次同时执行一个任务。"
+        )
+        DownloadQueueSection(
+            tasks = tasks,
+            onPause = onPauseTask,
+            onResume = onResumeTask,
+            onRemove = onRemoveTask
         )
         MediaListSection(
             title = "最近下载",
@@ -88,6 +102,82 @@ fun DownloadsScreen(
             title = "下载保存位置",
             description = "Download/VideoDL"
         )
+    }
+}
+
+@Composable
+private fun DownloadQueueSection(
+    tasks: List<DownloadQueueStore.Task>,
+    onPause: (String) -> Unit,
+    onResume: (String) -> Unit,
+    onRemove: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("下载队列", fontWeight = FontWeight.SemiBold, fontSize = 15.sp)
+            Spacer(Modifier.weight(1f))
+            Text("${tasks.count { it.status == "RUNNING" || it.status == "QUEUED" || it.status == "PAUSING" }} 个进行中",
+                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
+        }
+        if (tasks.isEmpty()) {
+            Text("目前没有下载任务。解析视频后点击下载，就会自动加入队列。",
+                color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+        } else {
+            tasks.asReversed().take(20).forEach { task ->
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(17.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
+                ) {
+                    Column(Modifier.padding(13.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(task.title, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 2,
+                            overflow = TextOverflow.Ellipsis)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                when (task.status) {
+                                    "QUEUED" -> "排队中"
+                                    "RUNNING" -> "正在下载"
+                                    "PAUSING" -> "正在暂停"
+                                    "PAUSED" -> "已暂停"
+                                    "COMPLETED" -> "已完成"
+                                    "FAILED" -> "失败"
+                                    else -> task.status
+                                },
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (task.status == "FAILED") MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(Modifier.weight(1f))
+                            if (task.status == "RUNNING" || task.status == "PAUSING" || task.status == "QUEUED") {
+                                OutlinedButton(onClick = { onPause(task.id) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 3.dp)) {
+                                    Text(if (task.status == "QUEUED") "暂停排队" else "暂停", fontSize = 10.sp)
+                                }
+                            } else if (task.status == "PAUSED" || task.status == "FAILED") {
+                                Button(onClick = { onResume(task.id) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 3.dp)) {
+                                    Text("继续", fontSize = 10.sp)
+                                }
+                            } else if (task.status == "COMPLETED") {
+                                OutlinedButton(onClick = { onRemove(task.id) }, contentPadding = PaddingValues(horizontal = 12.dp, vertical = 3.dp)) {
+                                    Text("移除", fontSize = 10.sp)
+                                }
+                            }
+                        }
+                        if (task.status == "RUNNING" || task.status == "PAUSING") {
+                            LinearProgressIndicator(
+                                progress = { task.progress.coerceIn(0, 100) / 100f },
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
+                        if (task.detail.isNotBlank()) {
+                            Text(task.detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -278,7 +368,13 @@ private fun formatDate(timestamp: Long): String {
 }
 
 @Composable
-fun SettingsScreen(contentPadding: PaddingValues, ffmpegAvailable: Boolean) {
+fun SettingsScreen(
+    contentPadding: PaddingValues,
+    ffmpegAvailable: Boolean,
+    hasCookie: Boolean,
+    onImportCookies: () -> Unit,
+    onClearCookies: () -> Unit
+) {
     PageFrame(contentPadding) {
         PageHeader(
             eyebrow = "PREFERENCES",
@@ -304,7 +400,7 @@ fun SettingsScreen(contentPadding: PaddingValues, ffmpegAvailable: Boolean) {
                 subtitle = if (ffmpegAvailable) {
                     "检测到 FFmpeg 动态库"
                 } else {
-                    "C++ JNI 已就绪，FFmpeg 库尚未打包"
+                    "FFmpegKit 原生库不可用，请重装或检查 APK"
                 },
                 trailing = if (ffmpegAvailable) "可用" else "待集成"
             )
@@ -323,9 +419,32 @@ fun SettingsScreen(contentPadding: PaddingValues, ffmpegAvailable: Boolean) {
                 trailing = "本地"
             )
         }
+        SettingsGroup("登录与画质") {
+            Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    if (hasCookie) "已导入 Cookie 文件" else "尚未导入 Cookie 文件",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "选择从浏览器导出的 Netscape cookies.txt 文件，可用于需要登录的网站。文件保存在应用私有且不参与备份的目录。",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                    lineHeight = 15.sp
+                )
+                Button(onClick = onImportCookies, modifier = Modifier.fillMaxWidth()) {
+                    Text(if (hasCookie) "重新导入 cookies.txt" else "导入 cookies.txt")
+                }
+                if (hasCookie) {
+                    OutlinedButton(onClick = onClearCookies, modifier = Modifier.fillMaxWidth()) {
+                        Text("删除已保存的 Cookie")
+                    }
+                }
+            }
+        }
         InfoStrip(
             icon = Icons.Outlined.Info,
-            title = "VideoDL Android 0.4.0",
+            title = "VideoDL Android 0.5.0",
             description = "仅下载你拥有或获准保存的内容。DRM 与访问控制不会被绕过。"
         )
     }

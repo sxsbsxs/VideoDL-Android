@@ -14,8 +14,8 @@ android {
         applicationId = "com.videodl"
         minSdk = 24
         targetSdk = 35
-        versionCode = 5
-        versionName = "0.4.1"
+        versionCode = 6
+        versionName = "0.5.0"
 
         ndk {
             abiFilters += listOf("arm64-v8a", "x86_64")
@@ -93,6 +93,7 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-full:8.1.9")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     testImplementation("junit:junit:4.13.2")

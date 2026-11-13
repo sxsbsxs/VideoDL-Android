@@ -129,7 +129,7 @@ def _extractor():
     return yt_dlp
 
 
-def _make_progress_hook(progress_file):
+def _make_progress_hook(progress_file, cancel_file=None):
     if not progress_file:
         return None
 
@@ -137,6 +137,9 @@ def _make_progress_hook(progress_file):
     os.makedirs(os.path.dirname(progress_file), exist_ok=True)
 
     def write_progress(data):
+        if cancel_file and os.path.exists(cancel_file):
+            from yt_dlp.utils import DownloadError
+            raise DownloadError("VIDEODL_PAUSE_REQUESTED")
         payload = {
             "status": data.get("status") or "unknown",
             "downloaded_bytes": data.get("downloaded_bytes") or 0,
@@ -217,7 +220,7 @@ def _cache_thumbnail(ydl, info, webpage_url, cache_dir):
     return ""
 
 
-def parse_video(url, cache_dir=None):
+def parse_video(url, cache_dir=None, cookie_path=None):
     value = _validate_url(url)
     yt_dlp = _extractor()
 
@@ -231,6 +234,8 @@ def parse_video(url, cache_dir=None):
         "retries": 2,
         "extractor_retries": 2,
     }
+    if cookie_path and os.path.isfile(cookie_path):
+        options["cookiefile"] = cookie_path
 
     with yt_dlp.YoutubeDL(options) as ydl:
         try:
@@ -259,14 +264,20 @@ def parse_video(url, cache_dir=None):
 
     raw_formats = info.get("formats") or []
     formats = []
+    video_only = []
+    audio_only = []
     for item in raw_formats:
         video_codec = item.get("vcodec")
         audio_codec = item.get("acodec")
-        if not video_codec or video_codec == "none":
-            continue
-        if not audio_codec or audio_codec == "none":
-            continue
         if item.get("has_drm"):
+            continue
+        if video_codec and video_codec != "none" and (not audio_codec or audio_codec == "none"):
+            video_only.append(item)
+            continue
+        if audio_codec and audio_codec != "none" and (not video_codec or video_codec == "none"):
+            audio_only.append(item)
+            continue
+        if not video_codec or video_codec == "none" or not audio_codec or audio_codec == "none":
             continue
 
         formats.append({
@@ -276,7 +287,47 @@ def parse_video(url, cache_dir=None):
             "ext": item.get("ext") or "unknown",
             "filesize": item.get("filesize") or item.get("filesize_approx"),
             "tbr": item.get("tbr") or 0,
+            "requires_merge": False,
         })
+
+    audio_only.sort(key=lambda item: item.get("abr") or item.get("tbr") or 0, reverse=True)
+    video_only.sort(
+        key=lambda item: (item.get("height") or 0, item.get("fps") or 0, item.get("tbr") or 0),
+        reverse=True
+    )
+    paired_heights = set()
+    for video in video_only:
+        height = video.get("height") or 0
+        if height <= 0 or height in paired_heights:
+            continue
+        video_ext = (video.get("ext") or "").lower()
+        preferred_audio = next(
+            (audio for audio in audio_only if (
+                (video_ext == "mp4" and audio.get("ext") in ("m4a", "mp4"))
+                or (video_ext == "webm" and audio.get("ext") == "webm")
+            )),
+            audio_only[0] if audio_only else None
+        )
+        if preferred_audio is None:
+            continue
+        video_id = str(video.get("format_id") or "")
+        audio_id = str(preferred_audio.get("format_id") or "")
+        if not video_id or not audio_id:
+            continue
+        video_size = video.get("filesize") or video.get("filesize_approx") or 0
+        audio_size = preferred_audio.get("filesize") or preferred_audio.get("filesize_approx") or 0
+        formats.append({
+            "format_id": video_id + "+" + audio_id,
+            "height": height,
+            "fps": video.get("fps"),
+            "ext": "mkv",
+            "filesize": (video_size + audio_size) if video_size and audio_size else None,
+            "tbr": (video.get("tbr") or 0) + (preferred_audio.get("abr") or preferred_audio.get("tbr") or 0),
+            "requires_merge": True,
+        })
+        paired_heights.add(height)
+        if len(paired_heights) >= 12:
+            break
 
     formats.sort(
         key=lambda item: (
@@ -317,18 +368,11 @@ def parse_video(url, cache_dir=None):
     return json.dumps(result, ensure_ascii=False)
 
 
-def download_video(url, format_id, output_dir, progress_file=None):
-    value = _validate_url(url)
-    yt_dlp = _extractor()
 
-    selected_format = (format_id or "best").strip()
-    if not re.fullmatch(r"[A-Za-z0-9._,+-]{1,100}", selected_format):
-        raise ValueError("下载格式标识无效。")
-
-    directory = os.path.abspath(output_dir)
-    os.makedirs(directory, exist_ok=True)
-    before = set(os.listdir(directory))
-
+def _download_component(url, format_id, output_dir, task_id, kind, progress_file, cookie_path, cancel_file):
+    component_dir = os.path.join(output_dir, ".videodl-components")
+    os.makedirs(component_dir, exist_ok=True)
+    prefix = os.path.join(component_dir, f"{task_id}-{kind}")
     options = {
         "quiet": True,
         "no_warnings": True,
@@ -337,42 +381,105 @@ def download_video(url, format_id, output_dir, progress_file=None):
         "overwrites": False,
         "ignoreerrors": False,
         "socket_timeout": 30,
-        "retries": 2,
-        "format": selected_format if selected_format != "best" else "best[acodec!=none]/best",
-        "outtmpl": os.path.join(directory, "%(title).180B [%(id)s] %(epoch)s.%(ext)s"),
+        "retries": 3,
+        "format": format_id,
+        "outtmpl": prefix + ".%(ext)s",
         "windowsfilenames": False,
     }
+    if cookie_path and os.path.isfile(cookie_path):
+        options["cookiefile"] = cookie_path
+    hook = _make_progress_hook(progress_file, cancel_file)
+    if hook:
+        options["progress_hooks"] = [hook]
+    try:
+        with yt_dlp.YoutubeDL(options) as ydl:
+            ydl.download([url])
+    except Exception as error:
+        if cancel_file and os.path.exists(cancel_file):
+            raise RuntimeError("VIDEODL_PAUSED") from error
+        _friendly_site_error(error)
 
-    progress_hook = _make_progress_hook(progress_file)
+    matches = []
+    for filename in os.listdir(component_dir):
+        if not filename.startswith(task_id + "-" + kind + "."):
+            continue
+        if filename.endswith((".part", ".ytdl", ".temp")):
+            continue
+        path = os.path.join(component_dir, filename)
+        if os.path.isfile(path):
+            matches.append(path)
+    if not matches:
+        raise RuntimeError("音视频分离流下载未生成完整文件。")
+    matches.sort(key=lambda item: os.path.getmtime(item), reverse=True)
+    return matches[0]
+
+
+def download_video(url, format_id, output_dir, progress_file=None,
+                   cookie_path=None, cancel_file=None, task_id=None):
+    value = _validate_url(url)
+    yt_dlp = _extractor()
+    selected_format = (format_id or "best").strip()
+    if not re.fullmatch(r"[A-Za-z0-9._,+-]{1,100}", selected_format):
+        raise ValueError("下载格式标识无效。")
+
+    directory = os.path.abspath(output_dir)
+    os.makedirs(directory, exist_ok=True)
+    stable_id = re.sub(r"[^A-Za-z0-9_-]", "", task_id or "task") or "task"
+
+    if "+" in selected_format:
+        parts = selected_format.split("+")
+        if len(parts) != 2 or not all(re.fullmatch(r"[A-Za-z0-9._-]{1,60}", part) for part in parts):
+            raise ValueError("音视频格式组合无效。")
+        video_path = _download_component(
+            value, parts[0], directory, stable_id, "video",
+            progress_file, cookie_path, cancel_file
+        )
+        audio_path = _download_component(
+            value, parts[1], directory, stable_id, "audio",
+            progress_file, cookie_path, cancel_file
+        )
+        return json.dumps({
+            "merge": True,
+            "video_path": video_path,
+            "audio_path": audio_path,
+            "output_path": os.path.join(directory, stable_id + "-merged.mkv"),
+        }, ensure_ascii=False)
+
+    before = set(os.listdir(directory))
+    options = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "continuedl": True,
+        "overwrites": False,
+        "ignoreerrors": False,
+        "socket_timeout": 30,
+        "retries": 3,
+        "format": selected_format if selected_format != "best" else "best[acodec!=none]/best",
+        "outtmpl": os.path.join(directory, "%(title).180B [%(id)s] " + stable_id + ".%(ext)s"),
+        "windowsfilenames": False,
+    }
+    if cookie_path and os.path.isfile(cookie_path):
+        options["cookiefile"] = cookie_path
+    progress_hook = _make_progress_hook(progress_file, cancel_file)
     if progress_hook:
         options["progress_hooks"] = [progress_hook]
-
     try:
         with yt_dlp.YoutubeDL(options) as ydl:
             ydl.download([value])
     except Exception as error:
+        if cancel_file and os.path.exists(cancel_file):
+            raise RuntimeError("VIDEODL_PAUSED") from error
         _friendly_site_error(error)
 
-    excluded_progress_files = set()
-    if progress_file:
-        excluded_progress_files.add(os.path.abspath(progress_file))
-        excluded_progress_files.add(os.path.abspath(progress_file) + ".tmp")
-
-    new_files = []
+    matching_files = []
     for filename in os.listdir(directory):
-        if filename in before or filename.endswith((".part", ".ytdl", ".temp")):
+        if filename.endswith((".part", ".ytdl", ".temp")):
             continue
         path = os.path.abspath(os.path.join(directory, filename))
-        if path in excluded_progress_files:
-            continue
-        if os.path.isfile(path):
-            new_files.append(path)
-
-    if not new_files:
-        raise RuntimeError(
-            "下载没有生成完整文件。该格式可能需要 FFmpeg 合并独立音视频流，"
-            "或网站要求登录、Cookie、DRM/特殊授权。"
-        )
-
-    new_files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
-    return new_files[0]
+        if os.path.isfile(path) and stable_id in filename:
+            matching_files.append(path)
+    if not matching_files:
+        raise RuntimeError("下载没有生成完整文件。请检查网站权限、Cookie 或所选格式。")
+    matching_files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
+    return matching_files[0]
